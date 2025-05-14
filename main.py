@@ -1,21 +1,20 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 import time
 
-# Lấy biến môi trường
 API_KEY = os.getenv("API_KEY")
 CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS")
 START_TIME = os.getenv("START_TIME")
 END_TIME = os.getenv("END_TIME")
+MIN_TOKEN_AMOUNT = Decimal(os.getenv("MIN_TOKEN_AMOUNT", "0"))  # default = 0 nếu không đặt
 
 BASESCAN_API = "https://api.basescan.org/api"
 
-# Hàm chuyển thời gian sang UNIX timestamp
 def to_timestamp(dt_str):
     return int(datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").timestamp())
 
-# Hàm lấy giao dịch token từ contract trong khoảng thời gian
 def get_token_transactions(contract_address, start_ts, end_ts):
     page = 1
     offset = 1000
@@ -49,26 +48,30 @@ def get_token_transactions(contract_address, start_ts, end_ts):
             elif ts >= end_ts:
                 return all_txs
             else:
-                all_txs.append(tx)
+                try:
+                    token_value = Decimal(tx["value"]) / Decimal(f'1e{tx["tokenDecimal"]}')
+                    if token_value >= MIN_TOKEN_AMOUNT:
+                        all_txs.append(tx)
+                except:
+                    continue  # bỏ qua nếu lỗi chuyển đổi
 
         if len(txs) < offset:
             break
         page += 1
-        time.sleep(0.25)  # tránh bị rate limit
+        time.sleep(0.25)
 
     return all_txs
 
-# Hàm chia nhỏ theo từng phút và đếm số giao dịch
 def get_transactions_by_minute(contract_address, start_ts, end_ts):
     tx_count = {}
     minute_ts = start_ts
 
     while minute_ts < end_ts:
         next_minute_ts = minute_ts + 60
-        print(f"📦 {datetime.utcfromtimestamp(minute_ts)} → {datetime.utcfromtimestamp(next_minute_ts)}")
+        print(f"📦 {datetime.fromtimestamp(minute_ts, timezone.utc)} → {datetime.fromtimestamp(next_minute_ts, timezone.utc)}")
 
         txs = get_token_transactions(contract_address, minute_ts, next_minute_ts)
-        tx_count[datetime.utcfromtimestamp(minute_ts)] = len(txs)
+        tx_count[datetime.fromtimestamp(minute_ts, timezone.utc)] = len(txs)
 
         minute_ts = next_minute_ts
         time.sleep(0.25)
@@ -88,6 +91,8 @@ def main():
         return
 
     print(f"📅 Khoảng thời gian: {START_TIME} → {END_TIME}")
+    print(f"⚙️ Lọc giao dịch có token ≥ {MIN_TOKEN_AMOUNT}")
+
     tx_count = get_transactions_by_minute(CONTRACT_ADDRESS, start_ts, end_ts)
 
     print(f"✅ Tổng số phút: {len(tx_count)}")
